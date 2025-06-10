@@ -1,5 +1,4 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,7 +6,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { CheckCircle, Circle, Plus, Edit, Trash2, Calendar, Filter } from 'lucide-react';
+import { CheckCircle, Circle, Plus, Edit, Trash2, Calendar, Filter, Brain, Wand2 } from 'lucide-react';
+import { AITaskOptimizer, TaskOptimization, OptimizedTask } from '@/services/aiTaskOptimizer';
+import AISuggestionCard from './AISuggestionCard';
 
 interface Task {
   id: string;
@@ -33,6 +34,8 @@ const TaskManager: React.FC<TaskManagerProps> = ({ tasks, onTasksUpdate, onTaskT
   const [filterPriority, setFilterPriority] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
   const [sortBy, setSortBy] = useState('deadline');
+  const [aiSuggestions, setAiSuggestions] = useState<Map<string, TaskOptimization>>(new Map());
+  const [showAiSuggestions, setShowAiSuggestions] = useState(true);
   const [newTask, setNewTask] = useState({
     title: '',
     description: '',
@@ -42,8 +45,74 @@ const TaskManager: React.FC<TaskManagerProps> = ({ tasks, onTasksUpdate, onTaskT
   });
   const { toast } = useToast();
 
+  const aiOptimizer = new AITaskOptimizer();
   const subjects = ['math', 'science', 'english', 'history', 'other'];
   const priorities = ['low', 'medium', 'high'];
+
+  useEffect(() => {
+    if (tasks.length > 0 && showAiSuggestions) {
+      generateAISuggestions();
+    }
+  }, [tasks, showAiSuggestions]);
+
+  const generateAISuggestions = () => {
+    const suggestions = aiOptimizer.analyzeWorkloadBalance(tasks);
+    setAiSuggestions(suggestions);
+    
+    const suggestionsCount = Array.from(suggestions.values()).filter(s => 
+      tasks.find(t => t.id === Array.from(suggestions.keys()).find(id => suggestions.get(id) === s))?.priority !== s.suggestedPriority ||
+      new Date(tasks.find(t => t.id === Array.from(suggestions.keys()).find(id => suggestions.get(id) === s))?.deadline || '').getTime() !== s.suggestedDeadline.getTime()
+    ).length;
+
+    if (suggestionsCount > 0) {
+      toast({
+        title: "AI Suggestions Available",
+        description: `Found ${suggestionsCount} optimization suggestion(s) for your tasks.`,
+      });
+    }
+  };
+
+  const handleAcceptSuggestion = (taskId: string, suggestion: TaskOptimization) => {
+    const updatedTasks = tasks.map(task => {
+      if (task.id === taskId) {
+        return {
+          ...task,
+          priority: suggestion.suggestedPriority,
+          deadline: suggestion.suggestedDeadline.toISOString().split('T')[0]
+        };
+      }
+      return task;
+    });
+    
+    onTasksUpdate(updatedTasks);
+    aiOptimizer.recordUserFeedback(taskId, true, {
+      priority: suggestion.suggestedPriority,
+      deadline: suggestion.suggestedDeadline
+    });
+    
+    // Remove suggestion after acceptance
+    const newSuggestions = new Map(aiSuggestions);
+    newSuggestions.delete(taskId);
+    setAiSuggestions(newSuggestions);
+    
+    toast({
+      title: "Suggestion Applied",
+      description: "Task has been optimized based on AI recommendation.",
+    });
+  };
+
+  const handleRejectSuggestion = (taskId: string) => {
+    const suggestion = aiSuggestions.get(taskId);
+    if (suggestion) {
+      aiOptimizer.recordUserFeedback(taskId, false, {
+        kept_original: true
+      });
+    }
+    
+    const newSuggestions = new Map(aiSuggestions);
+    newSuggestions.delete(taskId);
+    setAiSuggestions(newSuggestions);
+  };
 
   const handleAddTask = () => {
     if (!newTask.title.trim() || !newTask.deadline) {
@@ -125,6 +194,58 @@ const TaskManager: React.FC<TaskManagerProps> = ({ tasks, onTasksUpdate, onTaskT
 
   return (
     <div className="space-y-6">
+      {/* AI Optimization Controls */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center space-x-2">
+              <Brain className="w-5 h-5" />
+              <span>AI Task Optimization</span>
+            </CardTitle>
+            <div className="flex space-x-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAiSuggestions(!showAiSuggestions)}
+              >
+                {showAiSuggestions ? 'Hide' : 'Show'} AI Suggestions
+              </Button>
+              <Button
+                size="sm"
+                onClick={generateAISuggestions}
+              >
+                <Wand2 className="w-4 h-4 mr-2" />
+                Analyze Tasks
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        {showAiSuggestions && aiSuggestions.size > 0 && (
+          <CardContent>
+            <p className="text-sm text-gray-600 mb-4">
+              AI has analyzed your tasks and found optimization opportunities:
+            </p>
+            <div className="space-y-3">
+              {Array.from(aiSuggestions.entries()).map(([taskId, suggestion]) => {
+                const task = tasks.find(t => t.id === taskId);
+                if (!task) return null;
+                return (
+                  <AISuggestionCard
+                    key={taskId}
+                    taskId={taskId}
+                    currentPriority={task.priority}
+                    currentDeadline={task.deadline}
+                    suggestion={suggestion}
+                    onAccept={handleAcceptSuggestion}
+                    onReject={handleRejectSuggestion}
+                  />
+                );
+              })}
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
       {/* Add Task Button */}
       <Card>
         <CardHeader>
@@ -301,46 +422,60 @@ const TaskManager: React.FC<TaskManagerProps> = ({ tasks, onTasksUpdate, onTaskT
           ) : (
             <div className="space-y-3">
               {filteredTasks.map((task) => (
-                <div key={task.id} className="flex items-center space-x-3 p-4 bg-white rounded-lg border hover:shadow-sm transition-shadow">
-                  <button onClick={() => onTaskToggle(task.id)}>
-                    {task.completed ? (
-                      <CheckCircle className="w-5 h-5 text-green-600" />
-                    ) : (
-                      <Circle className="w-5 h-5 text-gray-400" />
-                    )}
-                  </button>
-                  
-                  <div className="flex-1">
-                    <h3 className={`font-medium ${task.completed ? 'line-through text-gray-500' : 'text-gray-900'}`}>
-                      {task.title}
-                    </h3>
-                    {task.description && (
-                      <p className="text-sm text-gray-600 mt-1">{task.description}</p>
-                    )}
-                    <div className="flex items-center space-x-2 mt-2">
-                      <Badge variant="secondary" className={getSubjectColor(task.subject)}>
-                        {task.subject}
-                      </Badge>
-                      <Badge variant="outline" className={getPriorityColor(task.priority)}>
-                        {task.priority}
-                      </Badge>
-                      <Badge variant="outline" className={task.source === 'ai' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'}>
-                        {task.source === 'ai' ? 'AI Extracted' : 'Manual'}
-                      </Badge>
-                      <span className="text-sm text-gray-500">
-                        Due: {new Date(task.deadline).toLocaleDateString()}
-                      </span>
+                <div key={task.id} className="space-y-2">
+                  <div className="flex items-center space-x-3 p-4 bg-white rounded-lg border hover:shadow-sm transition-shadow">
+                    <button onClick={() => onTaskToggle(task.id)}>
+                      {task.completed ? (
+                        <CheckCircle className="w-5 h-5 text-green-600" />
+                      ) : (
+                        <Circle className="w-5 h-5 text-gray-400" />
+                      )}
+                    </button>
+                    
+                    <div className="flex-1">
+                      <h3 className={`font-medium ${task.completed ? 'line-through text-gray-500' : 'text-gray-900'}`}>
+                        {task.title}
+                      </h3>
+                      {task.description && (
+                        <p className="text-sm text-gray-600 mt-1">{task.description}</p>
+                      )}
+                      <div className="flex items-center space-x-2 mt-2">
+                        <Badge variant="secondary" className={getSubjectColor(task.subject)}>
+                          {task.subject}
+                        </Badge>
+                        <Badge variant="outline" className={getPriorityColor(task.priority)}>
+                          {task.priority}
+                        </Badge>
+                        <Badge variant="outline" className={task.source === 'ai' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'}>
+                          {task.source === 'ai' ? 'AI Extracted' : 'Manual'}
+                        </Badge>
+                        <span className="text-sm text-gray-500">
+                          Due: {new Date(task.deadline).toLocaleDateString()}
+                        </span>
+                      </div>
                     </div>
-                  </div>
 
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    onClick={() => deleteTask(task.id)}
-                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={() => deleteTask(task.id)}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  
+                  {/* AI Suggestion for this specific task */}
+                  {showAiSuggestions && aiSuggestions.has(task.id) && (
+                    <AISuggestionCard
+                      taskId={task.id}
+                      currentPriority={task.priority}
+                      currentDeadline={task.deadline}
+                      suggestion={aiSuggestions.get(task.id)!}
+                      onAccept={handleAcceptSuggestion}
+                      onReject={handleRejectSuggestion}
+                    />
+                  )}
                 </div>
               ))}
             </div>
