@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -6,7 +5,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { Brain, Link, FileText, Wand2 } from 'lucide-react';
+import { Brain, Link, FileText, Wand2, AlertCircle, CheckCircle, Clock } from 'lucide-react';
+import { URLContentFetcher } from '@/services/urlContentFetcher';
+import { HomeworkNLP } from '@/services/homeworkNLP';
 
 interface Task {
   title: string;
@@ -26,8 +27,13 @@ const HomeworkExtractor: React.FC<HomeworkExtractorProps> = ({ onTasksExtracted 
   const [inputText, setInputText] = useState('');
   const [url, setUrl] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isUrlProcessing, setIsUrlProcessing] = useState(false);
   const [extractedTasks, setExtractedTasks] = useState<Task[]>([]);
+  const [urlContent, setUrlContent] = useState<string>('');
   const { toast } = useToast();
+
+  const urlFetcher = new URLContentFetcher();
+  const nlpProcessor = new HomeworkNLP();
 
   // AI-powered text processing simulation
   const processTextWithAI = async (text: string): Promise<Task[]> => {
@@ -115,6 +121,31 @@ const HomeworkExtractor: React.FC<HomeworkExtractorProps> = ({ onTasksExtracted 
     return tasks;
   };
 
+  const processWithAdvancedNLP = async (text: string): Promise<Task[]> => {
+    console.log('Processing text with advanced NLP...');
+    
+    try {
+      const assignments = nlpProcessor.extractAssignments(text);
+      
+      const tasks: Task[] = assignments.map(assignment => ({
+        title: assignment.title,
+        description: assignment.description,
+        subject: assignment.subject,
+        priority: assignment.priority,
+        deadline: assignment.deadline.toISOString().split('T')[0],
+        completed: false,
+        source: 'ai' as const
+      }));
+      
+      console.log(`Advanced NLP extracted ${tasks.length} tasks`);
+      return tasks;
+    } catch (error) {
+      console.error('Advanced NLP processing failed:', error);
+      // Fallback to simple processing
+      return await processTextWithAI(text);
+    }
+  };
+
   const handleTextExtraction = async () => {
     if (!inputText.trim()) {
       toast({
@@ -126,13 +157,14 @@ const HomeworkExtractor: React.FC<HomeworkExtractorProps> = ({ onTasksExtracted 
     }
 
     try {
-      const tasks = await processTextWithAI(inputText);
+      setIsProcessing(true);
+      const tasks = await processWithAdvancedNLP(inputText);
       setExtractedTasks(tasks);
       
       if (tasks.length > 0) {
         toast({
           title: "Tasks Extracted",
-          description: `Found ${tasks.length} potential homework task(s) using AI analysis.`,
+          description: `Found ${tasks.length} potential homework task(s) using advanced AI analysis.`,
         });
       } else {
         toast({
@@ -147,6 +179,8 @@ const HomeworkExtractor: React.FC<HomeworkExtractorProps> = ({ onTasksExtracted 
         description: "There was an error processing the text. Please try again.",
         variant: "destructive"
       });
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -160,10 +194,51 @@ const HomeworkExtractor: React.FC<HomeworkExtractorProps> = ({ onTasksExtracted 
       return;
     }
 
-    toast({
-      title: "Feature Coming Soon",
-      description: "URL extraction will be available in the next update. For now, please copy and paste the text content.",
-    });
+    try {
+      setIsUrlProcessing(true);
+      setUrlContent('');
+      
+      toast({
+        title: "Fetching Content",
+        description: "Extracting content from the provided URL...",
+      });
+
+      // Fetch content from URL
+      const content = await urlFetcher.fetchContent(url);
+      setUrlContent(content.content);
+      
+      toast({
+        title: "Content Extracted",
+        description: `Successfully extracted ${content.content.length} characters. Now analyzing for homework...`,
+      });
+
+      // Process the extracted content with NLP
+      const tasks = await processWithAdvancedNLP(content.content);
+      setExtractedTasks(tasks);
+      
+      if (tasks.length > 0) {
+        toast({
+          title: "Success!",
+          description: `Found ${tasks.length} homework task(s) from ${content.title}`,
+        });
+      } else {
+        toast({
+          title: "No Assignments Found",
+          description: "Couldn't identify any homework tasks from this URL. The content might not contain assignment information.",
+          variant: "destructive"
+        });
+      }
+      
+    } catch (error) {
+      console.error('URL extraction error:', error);
+      toast({
+        title: "URL Extraction Failed",
+        description: error instanceof Error ? error.message : "Failed to extract content from URL. Please check the URL and try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsUrlProcessing(false);
+    }
   };
 
   const confirmTask = (task: Task) => {
@@ -179,13 +254,22 @@ const HomeworkExtractor: React.FC<HomeworkExtractorProps> = ({ onTasksExtracted 
     setExtractedTasks(prev => prev.filter(t => t !== task));
   };
 
+  const getPriorityIcon = (priority: string) => {
+    switch (priority) {
+      case 'high': return <AlertCircle className="w-4 h-4 text-red-600" />;
+      case 'medium': return <Clock className="w-4 h-4 text-yellow-600" />;
+      case 'low': return <CheckCircle className="w-4 h-4 text-green-600" />;
+      default: return <Clock className="w-4 h-4 text-gray-600" />;
+    }
+  };
+
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center space-x-2">
             <Brain className="w-5 h-5" />
-            <span>AI Homework Extraction</span>
+            <span>Advanced AI Homework Extraction</span>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -196,7 +280,7 @@ const HomeworkExtractor: React.FC<HomeworkExtractorProps> = ({ onTasksExtracted 
               <h3 className="font-medium">Extract from Text</h3>
             </div>
             <Textarea
-              placeholder="Paste your classroom message, email, or assignment text here. The AI will analyze it to extract homework tasks..."
+              placeholder="Paste your classroom message, email, or assignment text here. The advanced AI will analyze it using NLP to extract homework tasks..."
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               rows={6}
@@ -210,12 +294,12 @@ const HomeworkExtractor: React.FC<HomeworkExtractorProps> = ({ onTasksExtracted 
               {isProcessing ? (
                 <>
                   <Wand2 className="w-4 h-4 mr-2 animate-spin" />
-                  Processing with AI...
+                  Processing with Advanced AI...
                 </>
               ) : (
                 <>
                   <Brain className="w-4 h-4 mr-2" />
-                  Extract Homework with AI
+                  Extract Homework with Advanced NLP
                 </>
               )}
             </Button>
@@ -226,21 +310,39 @@ const HomeworkExtractor: React.FC<HomeworkExtractorProps> = ({ onTasksExtracted 
             <div className="flex items-center space-x-2">
               <Link className="w-4 h-4" />
               <h3 className="font-medium">Extract from URL</h3>
+              <span className="text-sm text-green-600 font-medium">✓ Now Available!</span>
             </div>
             <Input
-              placeholder="Enter Google Classroom or other platform URL..."
+              placeholder="Enter Google Classroom, Canvas, or any educational platform URL..."
               value={url}
               onChange={(e) => setUrl(e.target.value)}
             />
             <Button 
               onClick={handleUrlExtraction} 
-              variant="outline"
-              disabled={!url.trim()}
+              disabled={isUrlProcessing || !url.trim()}
               className="w-full"
             >
-              <Link className="w-4 h-4 mr-2" />
-              Extract from URL (Coming Soon)
+              {isUrlProcessing ? (
+                <>
+                  <Wand2 className="w-4 h-4 mr-2 animate-spin" />
+                  Extracting from URL...
+                </>
+              ) : (
+                <>
+                  <Link className="w-4 h-4 mr-2" />
+                  Extract Homework from URL
+                </>
+              )}
             </Button>
+            
+            {urlContent && (
+              <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                <h4 className="font-medium text-sm text-gray-700 mb-2">Extracted Content Preview:</h4>
+                <p className="text-xs text-gray-600 max-h-20 overflow-y-auto">
+                  {urlContent.substring(0, 300)}...
+                </p>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -249,7 +351,7 @@ const HomeworkExtractor: React.FC<HomeworkExtractorProps> = ({ onTasksExtracted 
       {extractedTasks.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Review Extracted Tasks</CardTitle>
+            <CardTitle>Review AI-Extracted Tasks</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
@@ -271,8 +373,9 @@ const HomeworkExtractor: React.FC<HomeworkExtractorProps> = ({ onTasksExtracted 
                     <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
                       {task.subject}
                     </span>
-                    <span className="bg-gray-100 text-gray-800 px-2 py-1 rounded">
-                      {task.priority} priority
+                    <span className="bg-gray-100 text-gray-800 px-2 py-1 rounded flex items-center space-x-1">
+                      {getPriorityIcon(task.priority)}
+                      <span>{task.priority} priority</span>
                     </span>
                     <span className="text-gray-500">
                       Due: {new Date(task.deadline).toLocaleDateString()}
